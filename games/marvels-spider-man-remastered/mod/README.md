@@ -26,7 +26,7 @@ To uninstall, delete `winmm.dll` and `winmm_sys.dll` from the game folder.
 Keys only work in the focused game window. Log: `coop_log_<pid>.txt` in the game folder.
 
 ## Known limits
-- The partner's Spider-Man wears your own suit. Showing their real suit isn't working yet.
+- The partner's suit loads in its default style, so suit options (such as variants) may not match.
 - If the partner disconnects, their Spider-Man is parked out of sight. It isn't destroyed.
 - Pose updates are about 15 KB, sent up to 30 times a second (around 450 KB/s each way). That's fine
   on a LAN, but this isn't meant for internet play.
@@ -35,7 +35,7 @@ Keys only work in the focused game window. Log: `coop_log_<pid>.txt` in the game
 ## Build
 `build.bat` builds `build\winmm.dll`. `build.bat research` also compiles the reverse-engineering
 tools in `src/research.inc`: memory diffs, part dumps, the watchpoint and the partner-suit
-experiment. How everything was found: [../NOTES.md](../NOTES.md).
+tests (`preload`, `pstrip`, `pparts`). How everything was found: [../NOTES.md](../NOTES.md).
 
 ## Test tools
 `tools/` holds the scripts used to test on one PC with two copies of the game. Set `COOP_GAME_DIR`
@@ -45,4 +45,5 @@ backups.
 - `player_test.ps1`: two instances using only F7/F9, then screenshots of both.
 - `coop_test.ps1`, `puppet_test.ps1`: the older step-by-step runs over the command file.
 - `cmd.sh <pid> <command>`: write one command to `coop_cmd_<pid>.txt`. `shot.sh`: window screenshot.
+- `click.ps1`: a real mouse click in the game window (its menus ignore posted clicks).
 - `restore_saves.sh <stamp> <tag>`: restore saves after a test and check them by hash.

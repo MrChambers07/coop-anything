@@ -539,6 +539,55 @@ static int CollectParts(uint8_t* hero, PartDesc* out) {
     }
     return n;
 }
+
+// Load one skin item onto a SkinManager the way the game does (suit menu paper doll 0x140822390, remote
+// player 0x141f5e8c0): a default SkinItemPrius with only the item's asset at +0x30, handed to 0x1420bf2a0.
+// That copies it into a load request, streams the asset and its sub-assets, then adds the part
+// (0x1420c5db0 -> 0x1420c6890 -> AddPart 0x1420c8d50) in the slot the asset belongs to.
+static void LoadSkinItem(uint8_t* skin, uint64_t asset, void* priusVtable) {
+    using CtorFn = void*(__fastcall*)(void*);
+    alignas(16) uint8_t p[0x520] = {};
+    *(void**)p = priusVtable;
+    ((CtorFn)VA(0x1407a6090))(p + 0x40);
+    for (int i = 0; i < 4; i++) ((CtorFn)VA(0x1407a60f0))(p + 0x70 + i * 0x40);
+    for (int i = 0; i < 6; i++) ((CtorFn)VA(0x1407a60b0))(p + 0x170 + i * 0x48);
+    for (int i = 0; i < 4; i++) ((CtorFn)VA(0x1407a6060))(p + 0x320 + i * 0x70);
+    ((CtorFn)VA(0x1407a60d0))(p + 0x4e0);
+    ((CtorFn)VA(0x142273f20))(p);  // init
+    *(uint64_t*)(p + 0x08) |= 2;
+    *(uint64_t*)(p + 0x18) |= 2;
+    *(uint64_t*)(p + 0x30) = asset;
+    ((void(__fastcall*)(void*, void*))VA(0x1420bf2a0))(skin, p);
+    ((void(__fastcall*)(void*))VA(0x142274040))(p);  // release
+}
+
+// Dress the puppet in the partner's suit: drop parts they don't wear, load the ones that differ.
+static void ApplyPartnerSuit(uint8_t* puppet) {
+    uint8_t* hero = LocalHero();
+    uint8_t* hs = hero ? FindComponent(hero, ".?AVSkinManager@@") : nullptr;
+    uint8_t* ps = FindComponent(puppet, ".?AVSkinManager@@");
+    if (!hs || !ps || !*(uint8_t**)(hs + 0x50) || !*(uint8_t**)(ps + 0x50)) return;
+    void* vt = *(void**)(*(uint8_t**)(hs + 0x50) + 0x70);  // SkinItemPrius vtable, from our part 0's item
+    uint8_t* pparts = *(uint8_t**)(ps + 0x50);
+    uint32_t count = *(uint32_t*)(ps + 0x4c);
+    auto has = [&](uint32_t i) { return ((*(uint64_t*)(ps + 0x58 + (i >> 6) * 8) >> (i & 63)) & 1) != 0; };
+    auto assetAt = [&](uint32_t i) { return *(uint64_t*)(pparts + (uint64_t)i * 0x6b8 + 0x3c); };
+    for (uint32_t i = 0; i < count && i < 128; i++) {
+        if (!has(i)) continue;
+        bool keep = false;
+        for (int k = 0; k < g_remotePartCount; k++) keep |= g_remoteParts[k].index == i;
+        if (!keep) {
+            (*(void(__fastcall**)(void*, uint32_t))(*(uint8_t**)ps + 0x88))(ps, i);  // vtable +0x88; did not clear a part in tests
+            Log("suit: removed puppet part %u", i);
+        }
+    }
+    for (int k = 0; k < g_remotePartCount; k++) {
+        const PartDesc& r = g_remoteParts[k];
+        if (r.index < count && has(r.index) && assetAt(r.index) == r.asset) continue;
+        LoadSkinItem(ps, r.asset, vt);
+        Log("suit: loading partner part %u asset %llx", r.index, r.asset);
+    }
+}
 static SOCKET g_sock = INVALID_SOCKET;
 static int g_syncMode;  // 0 off (local follow test), 1 host, 2 client
 static sockaddr_in g_peer;
@@ -733,12 +782,13 @@ static void PuppetTick() {
     if (g_puppet && g_dressAt && g_ticks >= g_dressAt) {
         g_dressAt = 0;
         g_appliedPartsSig = 0;
-        // Partner's own suit (psuit) still renders invisible: a forged SkinItemPrius isn't enough, the suit
-        // has to come through the game's part-load path. Until then the puppet wears our suit.
-#ifdef COOP_RESEARCH
-        if (g_partnerSuit) return;  // ResearchTick dresses it from the partner's parts
-#endif
+        // Our suit first (visible at once), then the partner's parts are loaded over it below.
         if (uint8_t* a = ((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet)) DressPuppet(a);
+        return;
+    }
+    if (g_puppet && !g_dressAt && g_remotePartCount && g_remotePartsSig != g_appliedPartsSig) {
+        g_appliedPartsSig = g_remotePartsSig;
+        if (uint8_t* a = ((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet)) ApplyPartnerSuit(a);
     }
     if (!g_puppet) return;
     uint8_t* actor = ((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet);

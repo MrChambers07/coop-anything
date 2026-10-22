@@ -69,7 +69,8 @@ The prototype in [mod/](mod/) (C++, one proxy DLL, no game files):
 - Patches the LAN gate, allows a second instance, raises the game modes' player limit to 2,
   and hosts or joins through the game's own LAN session.
 - Stops the engine from creating the remote hero and spawns a plain hero actor as the
-  partner's puppet. It dresses the puppet with skin parts, the step that makes it visible.
+  partner's puppet. It dresses the puppet in the partner's suit through the game's own
+  item loader (the one the suit menu uses), which streams the suit's assets in.
 - Sends position and the full skeleton pose (237 joints) over its own UDP channel (port 59010),
   about 15 KB per packet at up to 30 Hz. The partner's game finds the host by LAN broadcast.
 - F7 hosts at the title screen, F9 joins and warps the partner to the host, F8 warps again.
@@ -80,6 +81,8 @@ The prototype in [mod/](mod/) (C++, one proxy DLL, no game files):
 Prototype, automated level only. Scripts in `mod/tools/` start two copies of the game on one PC,
 press F7 in one and F9 in the other, and take screenshots of both. On the release build both
 games showed both Spider-Men together on a rooftop, with the partner's movement and animation.
+The two games happened to wear different suits, and each showed the partner in the
+partner's suit. Changing the suit in the game's suit menu changed the puppet too.
 Killing the partner's game hid its puppet on the host, which kept running. Saves were backed
 up before every run and restored after, checked by hash.
 
@@ -101,15 +104,14 @@ hbgda's mod, from player reports in 2025:
 
 The prototype:
 
-- The partner's puppet wears your own suit, not theirs.
+- The partner's suit loads in its default style; suit options (such as variants) may not match.
 - No shared missions, enemies or world. Each player is in their own game.
 - The puppet is parked, not destroyed, when the partner leaves.
 - Build 23986256 only. Any other build is detected and the DLL does nothing.
 
 ## Next steps
 
-- Prototype: a two-PC LAN test, the partner's real suit (the game's own part-load path, see
-  NOTES.md), destroying the puppet on leave, then shared combat.
+- Prototype: a two-PC LAN test, destroying the puppet on leave, then shared combat.
 - hbgda's mod: record which game build(s) the current beta supports, and whether Steam
   updates break it. If someone with beta access agrees, document the transport and what state
   is synced, without copying the mod's files.

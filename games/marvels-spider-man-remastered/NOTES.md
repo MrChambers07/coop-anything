@@ -403,7 +403,7 @@ Remaining for a playable partner:
 - The receiver's AddPart with those values, using a SkinItemPrius cloned from our own entry and patched, gives an invisible puppet. The asset info is loaded on both sides.
 - Part dumps show the Prius also holds per-instance values (u32s at +0xdc, +0x11c, ...).
 - The right fix is the game's own part-load request path, the callers of `0x1420c6890`: `0x1420c6aa2` ← `0x1420d0d07` ← `0x1420cfe79`.
-- Kept as research (`psuit`). The puppet wears the local suit.
+- Kept as research (`psuit`). The puppet wears the local suit. (Solved in step 5.)
 
 **Leave:**
 - After 2 s without packets the puppet is parked at y = -5000 and shown again when packets resume.
@@ -421,3 +421,24 @@ Remaining for a playable partner:
 - Research code lives in `mod/src/research.inc` and is built only with `build.bat research` (/DCOOP_RESEARCH).
 - Release `winmm.dll` is 210 KB.
 - `mod/README.md` has install and play steps.
+
+### Step 5: partner suit through the game's item loader (2026-10-22 ~17:30)
+
+Why step 4's suit was invisible: AddPart alone skips streaming. The game loads a skin item in two stages:
+- `0x1420bf2a0(SkinManager*, SkinItemPrius*)` is the entry. It copies the Prius into a pooled load request (request +0 = skin handle, +8 = Prius copy, +0x520 = asset) and queues the asset load with callback `0x1420c5db0`.
+- `0x1420c5db0` resolves the part's sub-assets (`0x1420ce7b0` with skin +0xb4 / +0x180) and queues them with callback `0x1420c6890`.
+- `0x1420c6890` computes the slot from the asset info (`0x1420c1920`, info +0x74), clears it (`0x1420ca930`), then AddPart (`0x1420c8d50`) + vtable +0x58.
+- `0x1420c1ed0` + `0x1420cd900` skip an item identical to the one already worn (asset + property arrays compared).
+
+Callers that build a fresh Prius: the suit menu paper doll `0x140822390` (suit id -> suit def `0x140c92b70(0x146050d30, id)+0x30`, one item per entry) and the remote-player path `0x141f5e8c0`. Both build a default SkinItemPrius:
+- vtable (read at runtime from our hero's part entry +0x70), element ctors `0x1407a6090` (+0x40), `0x1407a60f0` x4 (+0x70, stride 0x40), `0x1407a60b0` x6 (+0x170, 0x48), `0x1407a6060` x4 (+0x320, 0x70), `0x1407a60d0` (+0x4e0); size 0x518;
+- init `0x142273f20`, flags +8 / +0x18 |= 2, asset at +0x30, then `0x1420bf2a0`, then release `0x142274040`.
+
+The mod does the same (`LoadSkinItem`) for each partner part whose asset differs (`ApplyPartnerSuit`). The part asset (entry +0x3c) equals the item asset (Prius +0x30). Vtable +0x88 on SkinManager is not a plain RemovePart: calling it changed nothing, so parts the partner doesn't wear are still left on.
+
+Tests:
+- One instance, `sync loop` (the puppet mirrors our own parts): equipped Spider Armor MK II in the game's suit menu. The log showed `suit: loading partner part 30 asset 8e7aed6ee3a9ffde` and the puppet switched to the armor.
+- Two instances, release build, `player_test.ps1`: the client's hero had a different part 30 (`9b54a708...`, classic suit) from the host (`bab656a0...`, Advanced Suit). Each side loaded the other's part 30 and the screenshots show the partner in the partner's suit.
+- Puppet part entries loaded this way have zeroed property arrays (the hero's carry per-item values), so suit options set through those properties may not match.
+
+Saves restored and hash-verified after each run.

@@ -4324,8 +4324,8 @@
   notes: Dev preview for Steam build 23986256. A proxy winmm.dll turns on the LAN session code left in the retail exe
     (room list, host and join, late join) and blocks the engine's remote hero, which crashes. It shows the partner as a
     puppet Spider-Man with position and full skeleton pose sent over its own UDP channel. F7 hosts, F9 finds the host by
-    LAN broadcast, joins and warps next to them. Each player is still in their own single-player game. The puppet wears
-    the local player's suit. QA is scripts driving two copies of the game on one PC with screenshots of both. No two-PC
+    LAN broadcast, joins and warps next to them. The puppet wears the partner's suit, loaded through the game's own item
+    loader. Each player is still in their own single-player game. QA is scripts driving two copies of the game on one PC with screenshots of both. No two-PC
     or human test yet. Write-up in games/marvels-spider-man-remastered.
   sources:
   - https://github.com/cranebeaker/coop-anything/tree/main/games/marvels-spider-man-remastered

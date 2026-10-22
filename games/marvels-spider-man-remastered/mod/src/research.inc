@@ -359,15 +359,21 @@ static void PuppetInfo() {
     }
 }
 
-// Research: dump our hero's enabled skin part entries (0x6b8 bytes each) as hex, 32 bytes per line.
-static void DumpParts() {
-    uint8_t* hero = LocalHero();
-    uint8_t* hs = hero ? FindComponent(hero, ".?AVSkinManager@@") : nullptr;
+static bool g_partsFull;
+
+// One line per enabled part of an actor (asset, entry flags at +0x6b4, item look hash), the full entry with "pparts full".
+static void DumpParts(uint8_t* actor, const char* who) {
+    uint8_t* hs = actor ? FindComponent(actor, ".?AVSkinManager@@") : nullptr;
     if (!hs) return;
     uint8_t* parts = *(uint8_t**)(hs + 0x50);
+    Log("parts %s: bits %llx", who, *(uint64_t*)(hs + 0x58));
     for (uint32_t i = 0; i < *(uint32_t*)(hs + 0x4c) && i < 128; i++) {
-        if (!((*(uint64_t*)(hs + 0x58 + (i >> 6) * 8) >> (i & 63)) & 1)) continue;
         uint8_t* e = parts + (uint64_t)i * 0x6b8;
+        bool on = (*(uint64_t*)(hs + 0x58 + (i >> 6) * 8) >> (i & 63)) & 1;
+        if (!on && !*(uint64_t*)(e + 0x3c)) continue;
+        Log("parts %s %2u %s asset %llx flags %04x look %llx", who, i, on ? "on " : "off", *(uint64_t*)(e + 0x3c),
+            *(uint16_t*)(e + 0x6b4), *(uint64_t*)(e + 0x98));
+        if (!on || !g_partsFull) continue;
         for (int o = 0; o < 0x6b8; o += 32) {
             char line[200];
             int len = _snprintf_s(line, sizeof line, _TRUNCATE, "part %2u +%03x:", i, o);
@@ -377,7 +383,6 @@ static void DumpParts() {
     }
 }
 
-static bool g_partnerSuit;  // research: dress the puppet in the partner's parts (renders invisible so far)
 
 // Pose: the scene node's +0xd8 points to the instance's joint buffer, 32-byte entries (unit quaternion
 // first)... actually 64-byte 4x4 matrices, one per skeleton joint (model node +0x88 -> +0x200 skeleton, joint count u16 at +2).
@@ -401,51 +406,28 @@ static void CopyPose(uint8_t* fromActor, uint8_t* toActor) {
     if (fb && tb && fb != tb && n && n == JointCount(tn)) memcpy(tb, fb, n * 64);  // 4x4 matrices
 }
 
-// Dress the puppet in the partner's parts: remove parts they don't wear, add theirs (AddPart descriptor
-// as in DressPuppet; the SkinItemPrius comes from our hero's entry for the same index).
-static void ApplyRemoteParts(uint8_t* puppet) {
+// Strip the puppet and dress it again through the game's item-load path (LoadSkinItem) with our own
+// parts: tests that path on one instance.
+static volatile LONG g_reloadRequest;
+
+static void ReloadPuppetSuit(uint8_t* puppet, bool stripOnly) {
     uint8_t* hero = LocalHero();
+    PartDesc parts[kMaxParts];
+    int n = hero ? CollectParts(hero, parts) : 0;
     uint8_t* hs = hero ? FindComponent(hero, ".?AVSkinManager@@") : nullptr;
     uint8_t* ps = FindComponent(puppet, ".?AVSkinManager@@");
-    uint8_t* pnode = *(uint8_t**)puppet;
-    if (!hs || !ps || !pnode) return;
-    uint8_t* hparts = *(uint8_t**)(hs + 0x50);
-    uint8_t* pparts = *(uint8_t**)(ps + 0x50);
+    if (!n || !ps || !hs) return;
     uint32_t count = *(uint32_t*)(ps + 0x4c);
-    auto has = [&](uint32_t i) { return ((*(uint64_t*)(ps + 0x58 + (i >> 6) * 8) >> (i & 63)) & 1) != 0; };
-    auto removePart = [&](uint32_t i) { (*(void(__fastcall**)(void*, uint32_t))(*(uint8_t**)ps + 0x88))(ps, i); };
-    for (uint32_t i = 0; i < count && i < 128; i++) {  // drop what the partner doesn't wear
-        if (!has(i)) continue;
-        bool keep = false;
-        for (int k = 0; k < g_remotePartCount; k++)
-            keep |= g_remoteParts[k].index == i && g_remoteParts[k].asset == *(uint64_t*)(pparts + (uint64_t)i * 0x6b8 + 0x3c);
-        if (!keep) {
-            removePart(i);
-            Log("dress: removed part %u", i);
-        }
-    }
-    for (int k = 0; k < g_remotePartCount; k++) {
-        const PartDesc& r = g_remoteParts[k];
-        if (r.index >= count || has(r.index)) continue;
-        void* info = ((void*(__fastcall*)(void*, uint64_t))VA(0x140bcc0e0))(VA(0x146050d30), r.asset);
-        alignas(16) uint8_t d[0x40] = {};
-        *(uint64_t*)(d + 0x00) = r.asset;
-        *(uint32_t*)(d + 0x08) = *(uint32_t*)(pnode + 0x64);
-        *(uint64_t*)(d + 0x0c) = r.a44;
-        *(uint64_t*)(d + 0x14) = r.a4c;
-        // SkinItemPrius for the partner's item: a copy of ours for this slot (same layout, vtables and
-        // inline arrays, no heap pointers) with their look hash, asset and small fields patched in.
-        alignas(16) static uint8_t prius[0x520];
-        memcpy(prius, hparts + (uint64_t)r.index * 0x6b8 + 0x70, 0x518);
-        *(uint64_t*)(prius + 0x28) = r.look;
-        *(uint64_t*)(prius + 0x30) = r.asset;
-        *(uint64_t*)(prius + 0x38) = r.extra;
-        *(uint8_t**)(d + 0x20) = prius;
-        d[0x30] = r.flag;
-        ((void(__fastcall*)(void*, uint32_t, void*))VA(0x1420c8d50))(ps, r.index, d);
-        if (info) (*(void(__fastcall**)(void*, void*))(*(uint8_t**)ps + 0x58))(ps, info);
-        Log("dress: partner part %u asset %llx (asset info %s) -> puppet parts %llx", r.index, r.asset,
-            info ? "loaded" : "NOT LOADED", *(uint64_t*)(ps + 0x58));
+    for (uint32_t i = 0; i < count && i < 128; i++)
+        if ((*(uint64_t*)(ps + 0x58 + (i >> 6) * 8) >> (i & 63)) & 1)
+            (*(void(__fastcall**)(void*, uint32_t))(*(uint8_t**)ps + 0x88))(ps, i);
+    Log("preload: puppet stripped, parts %llx", *(uint64_t*)(ps + 0x58));
+    if (stripOnly) return;
+    void* vt = *(void**)(*(uint8_t**)(hs + 0x50) + 0x70);
+    for (int k = 0; k < n; k++) {
+        uint8_t* e = *(uint8_t**)(hs + 0x50) + (uint64_t)parts[k].index * 0x6b8;
+        Log("preload: part %u asset %llx (item asset %llx)", parts[k].index, parts[k].asset, *(uint64_t*)(e + 0xa0));
+        LoadSkinItem(ps, parts[k].asset, vt);
     }
 }
 
@@ -479,7 +461,10 @@ static void ResearchTick() {
     if (InterlockedExchange(&g_adiffRequest, 0)) {
         if (uint8_t* h = LocalHero()) AnimDiff(h, "hero");
     }
-    if (InterlockedExchange(&g_priusRequest, 0)) DumpParts();
+    if (InterlockedExchange(&g_priusRequest, 0)) {
+        DumpParts(LocalHero(), "hero");
+        if (g_puppet) DumpParts(((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet), "puppet");
+    }
     if (g_warpWatch && g_ticks < g_warpWatchUntil && g_warpWatch[0xa8] != g_warpWatchLast) {
         g_warpWatchLast = g_warpWatch[0xa8];
         uint8_t* h = LocalHero();
@@ -499,9 +484,8 @@ static void ResearchTick() {
             Log("pbbox: copied hero bounds to puppet node");
         }
     }
-    if (g_partnerSuit && g_puppet && !g_dressAt && g_syncMode && g_remotePartCount && g_remotePartsSig != g_appliedPartsSig) {
-        g_appliedPartsSig = g_remotePartsSig;
-        if (uint8_t* a = ((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet)) ApplyRemoteParts(a);
+    if (LONG r = g_puppet ? InterlockedExchange(&g_reloadRequest, 0) : 0) {
+        if (uint8_t* a = ((ActorFromHandleFn)VA(0x1415a0560))(&g_puppet)) ReloadPuppetSuit(a, r == 2);
     }
 }
 
@@ -518,10 +502,12 @@ static bool ResearchCommand(const char* cmd) {
     } else if (!strcmp(cmd, "pcopy")) {
         g_poseCopy = !g_poseCopy;
         Log("pose copy %s", g_poseCopy ? "on" : "off");
-    } else if (!strcmp(cmd, "psuit")) {
-        g_partnerSuit = !g_partnerSuit;
-        Log("partner suit %s (applies at next puppet spawn)", g_partnerSuit ? "on" : "off");
-    } else if (!strcmp(cmd, "pparts")) {
+    } else if (!strcmp(cmd, "preload")) {
+        g_reloadRequest = 1;
+    } else if (!strcmp(cmd, "pstrip")) {
+        g_reloadRequest = 2;
+    } else if (!strncmp(cmd, "pparts", 6)) {
+        g_partsFull = !strcmp(cmd + 6, " full");
         g_priusRequest = 1;
     } else if (!strcmp(cmd, "pbbox")) {
         g_bboxRequest = 1;
